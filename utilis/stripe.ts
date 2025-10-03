@@ -1,13 +1,19 @@
+// /utilis/stripe.ts
 import Stripe from "stripe";
 
-const secretkey = process.env.stripe_secret_key;
+let stripe: Stripe | null = null;
 
-if(!secretkey){
-    throw new Error("Missing Stripe secret key");
+export function getStripe() {
+  if (!stripe) {
+    const secretKey = process.env.STRIPE_SECRET_KEY;
+
+    if (!secretKey) {
+      throw new Error("Missing Stripe secret key");
+    }
+
+    stripe = new Stripe(secretKey, {
+      apiVersion: "2024-12-18.acacia" as any,
+    });
+  }
+  return stripe;
 }
-
-const stripe = new Stripe(secretkey, {
-    apiVersion: "2024-12-18.acacia" as any,
-});
-
-export default stripe;

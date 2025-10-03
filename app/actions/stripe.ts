@@ -1,80 +1,82 @@
 "use server";
-import { currentUser, EmailAddress } from "@clerk/nextjs/server";
+import { currentUser } from "@clerk/nextjs/server";
 import db from "@/utilis/db";
 import transiction from "@/models/transiction";
-import stripe from "@/utilis/stripe";
-import { console } from "inspector";
 import Transaction from "@/models/transiction";
+import { getStripe } from "@/utilis/stripe";  // ✅ use lazy load
+
 interface CheckoutSessionResponse {
-    url?: string;
-    error?: string;
+  url?: string;
+  error?: string;
 }
 
-export async function createCheckoutSession():Promise<CheckoutSessionResponse>{
- const user = await currentUser();
- const coustmerEmail = user?.emailAddresses[0]?.emailAddress;
- 
- if (!coustmerEmail) {
- return {
- error: "User email not found"
- };
- } 
+export async function createCheckoutSession(): Promise<CheckoutSessionResponse> {
+  const user = await currentUser();
+  const customerEmail = user?.emailAddresses[0]?.emailAddress;
 
- try {
+  if (!customerEmail) {
+    return { error: "User email not found" };
+  }
+
+  try {
     await db();
-    const existingTransiction = await transiction.findOne({coustmerEmail});
+
+    const existingTransiction = await transiction.findOne({ customerEmail });
+    const stripe = getStripe(); // ✅ Stripe only initialized here
+
     if (existingTransiction) {
+      const subscriptions = await stripe.subscriptions.list({
+        customer: existingTransiction.coustmerId,
+        status: "all",
+        limit: 1,
+      });
 
-        const Subscriptions = await stripe.subscriptions.list({
-            customer: existingTransiction.coustmerId,
-            status:'all',
-            limit:1,
-        });
+      const currentSubscription = subscriptions.data.find(
+        (sub) => sub.status === "active"
+      );
 
-        const currentSubscription = Subscriptions.data.find((sub) => sub.status ==="active");
-
-        if (currentSubscription){
-            return{error:"subscription already active"}
-        }
+      if (currentSubscription) {
+        return { error: "Subscription already active" };
+      }
     }
-  
+
     const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [
-            {
-                price: process.env.stripe_Monthly_price_id,
-                quantity: 1,
-            },
-        ],
-        mode: "subscription",
-        customer_email: coustmerEmail, // Fixed typo here
-        success_url: `${process.env.NEXT_PUBLIC_URL}/dashboard`,
-        cancel_url: `${process.env.NEXT_PUBLIC_URL}`,
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price: process.env.STRIPE_MONTHLY_PRICE_ID, // ✅ use uppercase consistent var name
+          quantity: 1,
+        },
+      ],
+      mode: "subscription",
+      customer_email: customerEmail,
+      success_url: `${process.env.NEXT_PUBLIC_URL}/dashboard`,
+      cancel_url: `${process.env.NEXT_PUBLIC_URL}`,
     });
 
     return { url: session.url ?? undefined };
-} catch (error) {
-    return { error: 'Error creating Stripe checkout session' };
+  } catch (error) {
+    console.error(error);
+    return { error: "Error creating Stripe checkout session" };
+  }
 }
-}
 
-export async function createCustomerPortalSession(){
-    const user = await currentUser();
-    const customerEmail = user?.emailAddresses[0]?.emailAddress;
+export async function createCustomerPortalSession() {
+  const user = await currentUser();
+  const customerEmail = user?.emailAddresses[0]?.emailAddress;
 
-    try {
-        const transaction = await Transaction.findOne({
-            customerEmail,
-        });
+  try {
+    const transaction = await Transaction.findOne({ customerEmail });
+    const stripe = getStripe(); // ✅ lazy load here too
 
-        const portalSession = await stripe.billingPortal.sessions.create({
-            customer:transaction.customerId,
-            return_url:`${process.env.NEXT_PUBLIC_URL}/dashboard`
-        });
-        return  portalSession.url ?? `${process.env.NEXT_PUBLIC_URL}/dashboard`;
-        
-    } catch (error) {
-        console.error(error);
-        return null;
-    }
+    const portalSession = await stripe.billingPortal.sessions.create({
+      customer: transaction.customerId,
+      return_url: `${process.env.NEXT_PUBLIC_URL}/dashboard`,
+    });
+
+    return portalSession.url ?? `${process.env.NEXT_PUBLIC_URL}/dashboard`;
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
 }
